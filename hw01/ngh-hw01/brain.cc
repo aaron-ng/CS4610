@@ -11,6 +11,21 @@ const double goal_x = 20.0;
 const double goal_y = 0.0;
 bool done = false;
 
+void faceGoal(Robot* robot) {
+    float curr_angle = robot->pos_t;
+    // Calculating the goal coords based on the robots curr position (0,0)
+    float resp_goal_x = goal_x - robot->pos_x;
+    float resp_goal_y = goal_y - robot->pos_y;
+
+    // Get the angle the robot must change to move to target
+    float angle_arc_tan = atan2(resp_goal_y, resp_goal_x); // In tanget arc
+    float turn_amount = curr_angle - angle_arc_tan;
+
+    cout << "arc tan: " << angle_arc_tan << " turn amount: " << turn_amount << "\n";
+
+    robot->set_turn(turn_amount);
+}
+
 void
 callback(Robot* robot)
 {
@@ -45,7 +60,7 @@ callback(Robot* robot)
     }
     else {
         robot->set_vel(5.0);
-        robot->set_turn(-0.02);
+        faceGoal(robot);
     }
 }
 
