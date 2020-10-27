@@ -3,6 +3,7 @@
 #include <thread>
 #include <math.h>
 #include <cmath>
+#include <list>
 
 #include "robot.hh"
 extern "C" {
@@ -21,14 +22,178 @@ static int windowY = 600;
 static int MAZE_SIZE = 60;
 static int FACTOR_PER_METER = 4;
 static int grid_size = 300;
-static int occupiedScore = 1;
-static int freeScore = 1;
+static float occupiedMin = 1.0;
+static float freeMin = -2.0;
+
+static int GOAL_X = (grid_size / 2) + ceil(20 * 4);
+static int GOAL_Y = (grid_size / 2) - ceil(0 * 4);
+
 
 int turn_tick_count = 0;
 int tick_count = 0;
 int tick_global_count = 0;
+int tick_path_count = 0;
 
-Cell map_2d[600][600];
+Cell map_2d[300][300]; // MAIN MAP
+
+// Testing A* Algo
+// Cell map_2d[300][300];
+// static int GOAL_X = 230;
+// static int GOAL_Y = 150;
+// static int grid_size = 300;
+
+// Directions around a cell. Up/Down/Left/Right etc.
+std::vector<Cell> direction = {
+        Cell(0, 1), Cell(1, 0), Cell(0, -1), Cell(-1, 0), Cell(-1, -1), Cell(1, 1), Cell(-1, 1), Cell(1, -1)
+    };
+
+// The actual path that the robot should follow.
+std::vector<Cell> path;
+
+void printCell(Cell givenCell) {
+
+    cout << "Cell x,y,g,h: " 
+    << givenCell.x << "," 
+    << givenCell.y << ","
+    << givenCell.Gscore << "," 
+    << givenCell.Hscore << endl;
+
+    Cell* parentCell = givenCell.parent;
+
+    if (parentCell == nullptr) {
+        cout << "NULLPTR PARENT" << endl;
+    } else {
+        cout << "Parent Cell x,y,g,h: " 
+        << parentCell->x << "," 
+        << parentCell->y << ","
+        << parentCell->Gscore << "," 
+        << parentCell->Hscore << endl;
+    }
+}
+
+void printCellList2(std::list<Cell> givenCells) {
+    std::list<Cell>::iterator it;
+
+    cout << "BEGIN CELL LIST" << endl;
+
+    for (it = givenCells.begin(); it != givenCells.end(); it++) {
+        cout << "x,y,g,h: " << it->x << "," << it->y << "," <<  it->Gscore << "," << it->Hscore << endl;
+    }
+
+    cout << "END CELL LIST" << endl;
+}
+
+double getScore(Cell givenCell) {
+    return givenCell.Hscore + givenCell.Gscore;
+}
+
+bool isOccupied(int x, int y) {
+    return x < 0 || y < 0 || x >= grid_size || y >= grid_size || map_2d[x][y].hits > occupiedMin;
+}
+
+Cell* findCell(std::list<Cell> givenloc, int givX, int givY) {
+    std::list<Cell>::iterator it;
+    for (it = givenloc.begin(); it != givenloc.end(); it++) {
+        if (it->x == givX && it->y == givY) {
+            return &*it;
+        }
+    }
+
+    return nullptr;
+}
+
+Cell* findCell2(std::list<Cell*> givenloc, int givX, int givY) {
+    for (auto cell: givenloc) {
+        if (cell->x == givX && cell->y == givY) {
+            return cell;
+        }
+    }
+
+    return nullptr;
+}
+
+double euclidean(int initialX, int initialY, int targetX, int targetY) {
+    double dx = abs(initialX - targetX);
+    double dy = abs(initialY - targetY);
+
+    return 10 * sqrt(pow(dx, 2) + pow(dy, 2));
+}
+
+std::vector<Cell> aStarAlgo(int initialX, int initialY, int goalX, int goalY) {
+    std::list<Cell*> openCell, closeCell;
+
+    openCell.push_back(new Cell(initialX, initialY));
+
+    Cell *current = nullptr;
+
+    cout << "Beginning A* Algo" << endl;
+
+    while(!openCell.empty()) {
+        auto current_it = openCell.begin();
+        current = *current_it;
+
+        // Get the lowest score possible in openCell
+        for (auto it = openCell.begin(); it != openCell.end(); it++) {
+            auto cellTemp = *it;
+
+            // MAY NEED TO CHANGE FROM < TO <= IN FUTURE
+            if (getScore(*cellTemp) < getScore(*current)) {
+                current = cellTemp;
+                current_it = it;
+            }
+        }
+
+        if (current->x == goalX && current->y == goalY) {
+            break;
+        }
+
+        closeCell.push_back(current);
+        openCell.erase(current_it);
+
+        for (int i = 0; i < direction.size(); i++) {
+            int newX = current->x + direction[i].x;
+            int newY =  current->y + direction[i].y;
+
+            // If the current cell is occupied or in closeOpen move on
+            if (isOccupied(newX, newY) || findCell2(closeCell, newX, newY)) {
+                continue;
+            }
+
+            double totalCost = current->Gscore + ((i < 4) ? 10 : 14);
+
+            Cell *successor = findCell2(openCell, newX, newY);
+            
+            if (successor == nullptr) {
+                successor = new Cell(newX, newY, current);
+                successor->Gscore = totalCost;
+                successor->Hscore = euclidean(successor->x, successor->y, goalX, goalY);
+                openCell.push_back(successor);
+            } else if (totalCost < successor->Gscore) {
+                successor->parent = current;
+                successor->Gscore = totalCost;
+            }
+        }
+    }
+
+    std::vector<Cell> result;
+    while (current != nullptr) {
+        Cell currCell = Cell(current->x, current->y);
+        result.push_back(currCell);
+
+        if (current->x == initialX && current->y == initialY) {
+            break;
+        }
+
+        current = current->parent;
+    }
+
+    cout << "ENDING A* Algo. PATH LENGTH: " << result.size() << endl;
+
+    openCell.clear();
+    closeCell.clear();
+
+    return result;
+}
 
 std::vector<Cell> bresenhamLineAlgo(int x1, int y1, int x2, int y2) {
     std::vector<Cell> result;
@@ -71,20 +236,39 @@ std::vector<Cell> bresenhamLineAlgo(int x1, int y1, int x2, int y2) {
 void initilize_2dMap() {
     for (int i = 0; i < grid_size; i++) {
         for (int j = 0; j < grid_size; j++) {
-            Cell currCell = Cell();
+            Cell currCell = Cell(i, j);
             map_2d[i][j] = currCell;
         }
     }
+
+    map_2d[GOAL_X][GOAL_Y].isGoal = true;
+    map_2d[GOAL_X + 1][GOAL_Y].isGoal = true;
+    map_2d[GOAL_X][GOAL_Y + 1].isGoal = true;
+    map_2d[GOAL_X + 1][GOAL_Y + 1].isGoal = true;
 }
 
-void drawXY2(int x, int y, bool freeColor) {
-    int xx = x * 2;
-    int yy = y * 2;
-
-    if (freeColor) {
-        gfx_color(0, 255, 0);
-    } else {
-        gfx_color(255, 0, 0);
+// Draw each point based on colorType
+// 0 = Empty
+// 1 = Occupied
+// 2 = Goal
+// 3 = Path
+void drawXY2(int x, int y, int colorType) {
+    switch(colorType) {
+        case 0:
+            gfx_color(0, 255, 0);
+            break;
+        case 1:
+            gfx_color(255, 0, 0);
+            break;
+        case 2:
+            gfx_color(255, 223, 0);
+            break;
+        case 3:
+            gfx_color(255, 165, 0);
+            break;
+        case 4:
+            gfx_color(0, 0, 0);
+            break;
     }
 
     gfx_point(x, y);
@@ -92,18 +276,33 @@ void drawXY2(int x, int y, bool freeColor) {
 
 
 void draw2DMap() {
+
+    gfx_clear();
+
     for (int i = 0; i < grid_size; i++) {
         for (int j = 0; j < grid_size; j++) {
             Cell currCell = map_2d[i][j];
 
-            if (currCell.hits < -2) {
-                drawXY2(i, j, true);
-            }
-
-            if (currCell.hits > 1.0) {
-                drawXY2(i, j, false);
+            if (currCell.isGoal) {
+                drawXY2(i, j, 2);
                 continue;
             }
+
+            if (currCell.hits < freeMin) {
+                drawXY2(i, j, 0);
+            }
+
+            if (currCell.hits > occupiedMin) {
+                drawXY2(i, j, 1);
+                continue;
+            }
+        }
+    }
+
+    // Print the current path
+    if (path.size() > 0) {
+        for (int i = 0; i < path.size(); i++) {
+            drawXY2(path[i].x, path[i].y, 3);
         }
     } 
 }
@@ -168,8 +367,12 @@ callback(Robot* robot)
 
     cout << "\n===" << endl;
 
-    cout << "tick: " << tick_global_count << endl;
+    cout << "tick: " << tick_global_count << " tickPathCount: " << tick_path_count << endl;
     tick_global_count++;
+    tick_path_count++;
+
+    int robo_x_in_2dMap = (grid_size / 2) + ceil(robot->pos_x * 4);
+    int robo_y_in_2dMap = (grid_size / 2) - ceil(robot->pos_y * 4);
 
     for (auto hit : robot->ranges) {
         float hit_angle, robot_angle, dx, dy, detectedX, detectedY;
@@ -204,9 +407,6 @@ callback(Robot* robot)
 
         int x_in_2dMap = (grid_size / 2) + ceil(detectedX * 4);
         int y_in_2dMap = (grid_size / 2) - ceil(detectedY * 4);
-
-        int robo_x_in_2dMap = (grid_size / 2) + ceil(robot->pos_x * 4);
-        int robo_y_in_2dMap = (grid_size / 2) - ceil(robot->pos_y * 4);
 
         std::vector<Cell> inBetweenCells = bresenhamLineAlgo(robo_x_in_2dMap, robo_y_in_2dMap, x_in_2dMap, y_in_2dMap);
 
@@ -291,12 +491,18 @@ callback(Robot* robot)
     //     << fwd << ","
     //     << rgt << endl;
 
-    // cout << "x,y,t = "
-    //      << robot->pos_x << ","
-    //      << robot->pos_y << ","
-    //      << robot->pos_t << endl;
+    cout << "x,y,t = "
+         << robo_x_in_2dMap << ","
+         << robo_y_in_2dMap << endl;
     // robot->set_vel(robot->pos_t, -robot->pos_t);
-    
+}
+
+void clearPath() {
+    for (int i = 0; i < grid_size; i++) {
+        for (int j = 0; j < grid_size; j++) {
+            map_2d[i][j].isPath = false;
+        }
+    }
 }
 
 void
@@ -305,14 +511,35 @@ robot_thread(Robot* robot)
     robot->do_stuff();
 }
 
+void findPathThread(Robot* robot) {
+    while(1) {
+        if (tick_path_count > 30) {
+            tick_path_count = 0;
+
+            cout << "Updating Algo" << endl;
+            
+            int robo_x_in_2dMap = (grid_size / 2) + ceil(robot->pos_x * 4);
+            int robo_y_in_2dMap = (grid_size / 2) - ceil(robot->pos_y * 4);
+
+            std::vector<Cell> foundPath = aStarAlgo(robo_x_in_2dMap, robo_y_in_2dMap, GOAL_X, GOAL_Y);
+
+            path.clear();
+
+            path = foundPath;
+        }
+    }    
+}
+
 int
 main(int argc, char* argv[])
 {
     cout << "making robot" << endl;
 
     initilize_2dMap();
+
     Robot robot(argc, argv, callback);
     std::thread rthr(robot_thread, &robot);
+    std::thread pthr(findPathThread, &robot);
 
     createWindow();
 
