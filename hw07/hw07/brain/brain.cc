@@ -33,6 +33,8 @@ int turn_tick_count = 0;
 int tick_count = 0;
 int tick_global_count = 0;
 int tick_path_count = 0;
+int tick_wallFollow_count = 0;
+bool makingTurn = false;
 
 Cell map_2d[300][300]; // MAIN MAP
 
@@ -49,6 +51,10 @@ std::vector<Cell> direction = {
 
 // The actual path that the robot should follow.
 std::vector<Cell> path;
+int currentPathIndex = 0;
+bool pathMaze = false;
+bool currentlyPathing = false;
+bool initialPath = true;
 
 void printCell(Cell givenCell) {
 
@@ -126,8 +132,6 @@ std::vector<Cell> aStarAlgo(int initialX, int initialY, int goalX, int goalY) {
 
     Cell *current = nullptr;
 
-    cout << "Beginning A* Algo" << endl;
-
     while(!openCell.empty()) {
         auto current_it = openCell.begin();
         current = *current_it;
@@ -187,7 +191,7 @@ std::vector<Cell> aStarAlgo(int initialX, int initialY, int goalX, int goalY) {
         current = current->parent;
     }
 
-    cout << "ENDING A* Algo. PATH LENGTH: " << result.size() << endl;
+    // cout << "ENDING A* Algo. PATH LENGTH: " << result.size() << endl;
 
     openCell.clear();
     closeCell.clear();
@@ -355,10 +359,195 @@ void printCellList(std::vector<Cell> givenCells) {
     cout << "LAST CELL: " << givenCells[givenCells.size() - 1].x << "," << givenCells[givenCells.size() - 1].y << endl;
 }
 
+// Returns the angle based on robot bearing
+float angleToCoords(int originalX, int originalY, int targetX, int targetY) {
+    int dx = targetX - originalX;
+    int dy = targetY - originalY;
+
+    if (dx == 0 && dy < 0) {
+        cout << "Flag1" << endl;
+        return M_PI / 2;
+    }
+    if (dx == 0 && dy > 0) {
+        cout << "Flag2" << endl;
+        return - M_PI / 2;
+    }
+
+    if (dx < 0 && dy == 0) {
+        cout << "Flag3" << endl;
+        return -M_PI + 0.1; // - M_PI will flip a trigger later down
+    }
+
+    if (dx > 0 && dy == 0) {
+        cout << "Flag4" << endl;
+        return 0.0;
+    }
+
+    if (dx == 0 && dy == 0) {
+        cout << "Flag5" << endl;
+        return 0.0;
+    }
+
+    double ang = dy / dx;
+
+    // Quadrant 1
+    if (0 < dx && 0 < dy) {
+        cout << "Flag6" << endl;
+        return atan(ang) + (-M_PI / 2);
+    }
+
+    // Quadrant 2
+    if (0 < dx && 0 > dy) {
+        cout << "Flag7" << endl;
+        return - atan(ang);
+    }
+
+    // Quadrant 3
+    if (0 > dx && 0 > dy) {
+        cout << "Flag8" << endl;
+        return (M_PI / 2) + atan(ang);
+    }
+
+    // Quadrant 4
+    if (0 > dx && 0 < dy) {
+        cout << "Flag9" << endl;
+        return atan(ang);
+    }
+
+    // // Quadrant 1 (0 - 90)
+    // if (0 < dx && 0 < dy) {
+    //     cout << "Flag6" << endl;
+    //     return - atan(ang);
+    // }
+
+    // // Quadrant 2 (90 - 180)
+    // if (0 < dx && 0 > dy) {
+    //     cout << "Flag7" << endl;
+    //     return atan(ang) + (-M_PI / 2);
+    // }
+
+    // // Quadrant 3 (180 - 270)
+    // if (0 > dx && 0 > dy) {
+    //     cout << "Flag8" << endl;
+    //     return M_PI + atan(ang);
+    // }
+
+    // // Quadrant 4 (270 - 360)
+    // if (0 > dx && 0 < dy) {
+    //     cout << "Flag9" << endl;
+    //     return - atan(ang);
+    // }
+
+    // Should never reach here
+    cout << "SHOULD NEVER REACH HERE" << endl;
+    return 0;
+}
+
+void wallFollow(Robot* robot) {
+
+    float rgt = clamp(0.0, robot->ranges[2].range, 2.0);
+    float fwd = clamp(0.0, robot->ranges[3].range, 2.0);
+    float lft = clamp(0.0, robot->ranges[4].range, 2.0);
+
+    float spd = 1;
+    float trn = 0;
+
+    // Turn logic
+    if (fwd < 1.3 || turn_tick_count > 0) {
+        // Front sensor has been hit therefore turn to left
+        spd = 0;
+        trn = 2;
+        turn_tick_count++;
+
+        if (turn_tick_count == 60) {
+            turn_tick_count = 0;
+        }
+
+        robot->set_vel(spd + trn, spd - trn);
+        return;
+    }
+
+    // Wall follow logic
+    // If lft_90 is not within this range adjust robot to kiss wall
+    if (1 > lft || lft > 1.5) {
+        if (lft < 1) { // Too close to wall turn left
+            spd = 1;
+            trn = 2;
+        }
+
+        if (lft > 1.5) {
+            spd = 1;
+            trn = -2;
+        }
+    } else {
+        spd = 4;
+        trn = 0;
+    }
+
+
+    robot->set_vel(spd + trn, spd - trn);
+}
+
+void findClosestIndexInPath(int ox, int oy) {
+
+    int cx = 99999;
+    int cy = 99999;
+    int smallest = 4;
+
+    int i = 0;
+
+    if (path.size() > 4) {
+        i = 4;
+    }
+
+    for (i; i < path.size(); i++) {
+        Cell currCell = path[i];
+        if (abs(currCell.x - ox) + abs(currCell.y - oy) < abs(cx - ox) + abs(cy - oy)) {
+            smallest = i;
+            cx = currCell.x;
+            cy = currCell.y;
+        }
+        // if (abs(path[i].x - ox) < 3 && abs(path[i].y - oy) < 3) {
+        //     currentPathIndex = i;
+        // }
+    }
+
+    currentPathIndex = smallest;
+}
+
+/**
+ * Computes angle difference, accounting for the weirdness with the angle
+ * system.
+ *
+ * Positive means turn CCW, negative means turn CW.
+ * 
+ * Taken from piazaa by Trey Del Bonis
+ */
+float angle_diff(float from, float to) {
+    float from_adj = from < 0 ? (2 * M_PI) + from : from;
+    float to_adj = to < 0 ? (2 * M_PI) + to : to;
+    float raw_delta = fmodf(to_adj - from_adj, 2 * M_PI);
+
+    if (raw_delta < -M_PI) {
+        return (2 * M_PI) + raw_delta;
+    }
+
+    if (raw_delta > M_PI) {
+        return (-2 * M_PI) + raw_delta;
+    }
+
+    return raw_delta;
+}
+
 void
 callback(Robot* robot)
 {
     tick_count += 1;
+
+    if (robot->at_goal()) {
+        robot->done();
+        return;
+    }
 
     if (tick_count > 20) {
         tick_count = 0;
@@ -367,7 +556,7 @@ callback(Robot* robot)
 
     cout << "\n===" << endl;
 
-    cout << "tick: " << tick_global_count << " tickPathCount: " << tick_path_count << endl;
+    cout << "tick: " << tick_global_count << " pathIndex: " << currentPathIndex << endl;
     tick_global_count++;
     tick_path_count++;
 
@@ -431,9 +620,9 @@ callback(Robot* robot)
 
             float bearing_from_heading = hit_angle + robot_angle;
 
-            cout << "A: " << hit.angle << " A,Bearing: " << bearing_from_heading << " hr: " << hit.range
-            << " x,y,t: " << robo_x_in_2dMap << "," << robo_y_in_2dMap << "," << robot->pos_t
-            << " dx,dy: " << x_in_2dMap << ","  << y_in_2dMap << endl;
+            // cout << "A: " << hit.angle << " A,Bearing: " << bearing_from_heading << " hr: " << hit.range
+            // << " x,y,t: " << robo_x_in_2dMap << "," << robo_y_in_2dMap << "," << robot->pos_t
+            // << " dx,dy: " << x_in_2dMap << ","  << y_in_2dMap << endl;
         }
 
         // cout << hit.range << "@" << hit.angle << endl;
@@ -443,58 +632,91 @@ callback(Robot* robot)
         return;
     }
 
-    float rgt = clamp(0.0, robot->ranges[2].range, 2.0);
-    float fwd = clamp(0.0, robot->ranges[3].range, 2.0);
-    float lft = clamp(0.0, robot->ranges[4].range, 2.0);
-
-    float spd = 1;
-    float trn = 0;
-
-    // Turn logic
-    if (fwd < 1.3 || turn_tick_count > 0) {
-        // Front sensor has been hit therefore turn to left
-        spd = 0;
-        trn = 2;
-        turn_tick_count++;
-
-        if (turn_tick_count == 60) {
-            turn_tick_count = 0;
-        }
-
-        robot->set_vel(spd + trn, spd - trn);
+    // If there is no path do nothing and wait
+    if (path.size() == 0) {
+        pathMaze = true;
         return;
     }
 
-    // Wall follow logic
-    // If lft_90 is not within this range adjust robot to kiss wall
-    if (1 > lft || lft > 1.5) {
-        if (lft < 1) { // Too close to wall turn left
-            spd = 1;
-            trn = 2;
-        }
+    // Set path index to the closest path
+    findClosestIndexInPath(robo_x_in_2dMap, robo_y_in_2dMap);
 
-        if (lft > 1.5) {
-            spd = 1;
-            trn = -2;
+    // If Path is blocked follow the right wall until we figure something out?
+    float fwd = clamp(0.0, robot->ranges[3].range, 2.0);
+
+    if (fwd > 3 && currentlyPathing) {
+        return;
+    }
+
+    // If the forward sensor hits wall then path list is incorrect.
+    // Map out the maze until new path can be created
+    // MAY NEED TO CHANGE LOGIC SO THAT WE DONT FLAG THE FWD < 1.2 before FACING PATH
+    if (fwd < 0.6 || tick_wallFollow_count > 0) {
+
+        // cout << "WallFollowTicks: " << tick_wallFollow_count << " isPathing?: " << currentlyPathing << endl;
+
+        int ratio_of_ticks_to_wait = path.size() * 8;
+
+        if (ratio_of_ticks_to_wait < 200) {
+            ratio_of_ticks_to_wait = 200;
         }
-    } else {
-        spd = 2;
-        trn = 0;
+        cout << "WallFollowTickRatio: " << ratio_of_ticks_to_wait << endl;
+
+        // We want to follow the wall for 90 ticks then pathMaza
+        if (tick_wallFollow_count > ratio_of_ticks_to_wait) {
+            tick_wallFollow_count = 0;
+            return;
+        }
+        
+        pathMaze = true;
+        wallFollow(robot);
+        tick_wallFollow_count++;
+        return;
+    }
+
+    // Need to determine which point im heading to?
+    Cell tempCell = path[currentPathIndex];
+
+        // If we are at current cell (or close enough) then work on next cell;
+    if (abs(tempCell.x - robo_x_in_2dMap) < 4 && abs(tempCell.y - robo_y_in_2dMap) < 4) {
+        currentPathIndex += 4;
+        tempCell = path[currentPathIndex];
     }
 
 
-    robot->set_vel(spd + trn, spd - trn);
+    // Get ArcTan
+    float targetTheta = angleToCoords(robo_x_in_2dMap, robo_y_in_2dMap, tempCell.x, tempCell.y);
 
-    // cout << "spd,trn = " << spd << "," << trn << endl;
-    // cout << "lft,fwd,rgt = "
-    //     << lft << ","
-    //     << fwd << ","
-    //     << rgt << endl;
+    if (targetTheta > M_PI) {
+        targetTheta = targetTheta - M_PI;
+    }
 
-    cout << "x,y,t = "
-         << robo_x_in_2dMap << ","
-         << robo_y_in_2dMap << endl;
-    // robot->set_vel(robot->pos_t, -robot->pos_t);
+    if (targetTheta < -M_PI) {
+        targetTheta = targetTheta + M_PI;
+    }
+
+    cout << "x,y,tx,ty = " << robo_x_in_2dMap << "," << robo_y_in_2dMap << "," << tempCell.x << "," << tempCell.y << endl;
+    cout << "t, tTheta, d180: " << robot->pos_t << "," << targetTheta << endl;
+
+    // if (abs(tempCell.x - robo_x_in_2dMap) == 0 && abs(tempCell.y - robo_y_in_2dMap) == 0) {
+    //     currentPathIndex++;
+    //     return;
+    // }
+    
+    // If we are at the correct angle go forwards
+    if (abs(targetTheta - robot->pos_t) < 0.1) {
+        robot->set_vel(4, 4);
+    } else {
+        float diff = angle_diff(robot->pos_t, targetTheta) * 1.5;
+
+        if (abs(diff) < 1) {
+            diff = diff > 0 ? 2: -2;
+        }
+
+        robot->set_vel(-diff, diff);
+
+        cout << "Making turn. diff, targetTheta, rPosT: " << diff << "," << targetTheta << "," << robot->pos_t << endl; 
+    }
 }
 
 void clearPath() {
@@ -513,10 +735,14 @@ robot_thread(Robot* robot)
 
 void findPathThread(Robot* robot) {
     while(1) {
-        if (tick_path_count > 30) {
+        if (path.size() > 0 && path[4].x == 154 && path[4].y == 149) { // Remove initial path
+            path.clear();
+            continue;
+        }
+        if (pathMaze || initialPath || tick_global_count < 10) {
+            cout << "FINDING PATH" << endl;
+            currentlyPathing = true;
             tick_path_count = 0;
-
-            cout << "Updating Algo" << endl;
             
             int robo_x_in_2dMap = (grid_size / 2) + ceil(robot->pos_x * 4);
             int robo_y_in_2dMap = (grid_size / 2) - ceil(robot->pos_y * 4);
@@ -525,9 +751,54 @@ void findPathThread(Robot* robot) {
 
             path.clear();
 
+            std::reverse(foundPath.begin(), foundPath.end());
+
+            cout << "FOUND PATH" << endl;
+
             path = foundPath;
+            currentPathIndex = 4;
+            pathMaze = false;
+            currentlyPathing = false;
+            initialPath = false;
         }
+
     }    
+}
+
+// Smooth out the maze
+void lineSmoothAlgo() {
+
+    for (int i = 2; i < grid_size-2; i++) {
+        for (int j = 2; j < grid_size-2; j++) {
+            // Check agencies
+            Cell currCell = map_2d[i][j];
+
+            if (currCell.hits > occupiedMin) {
+
+                // North
+                if (map_2d[i + 2][j].hits > occupiedMin && map_2d[i + 1][j].hits < occupiedMin) {
+                    map_2d[i + 1][j].hits += 2;
+                }
+
+                // East
+                if (map_2d[i][j + 2].hits > occupiedMin && map_2d[i][j + 1].hits < occupiedMin) {
+                    map_2d[i][j + 1].hits += 2;
+                }
+
+                // South
+                if (map_2d[i - 2][j].hits > occupiedMin && map_2d[i - 1][j].hits < occupiedMin) {
+                    map_2d[i - 1][j].hits += 2;
+                }
+
+                // West
+                if (map_2d[i][j - 2].hits > occupiedMin && map_2d[i][j - 1].hits < occupiedMin) {
+                    map_2d[i][j - 1].hits += 2;
+                }
+
+            }
+        }
+    }
+
 }
 
 int
@@ -540,6 +811,7 @@ main(int argc, char* argv[])
     Robot robot(argc, argv, callback);
     std::thread rthr(robot_thread, &robot);
     std::thread pthr(findPathThread, &robot);
+    std::thread lsthr(lineSmoothAlgo);
 
     createWindow();
 
